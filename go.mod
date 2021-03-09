@@ -1,10 +1,9 @@
-module github.com/hellowords/go-session-redis
+module github.com/hellowords/gsr
 
 go 1.16
 
 require (
 	github.com/go-redis/redis/v8 v8.7.1
-	github.com/gomodule/redigo v1.8.4
 	github.com/gorilla/securecookie v1.1.1
 	github.com/gorilla/sessions v1.2.1
 	github.com/onsi/ginkgo v1.15.1 // indirect
