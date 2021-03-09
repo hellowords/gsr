@@ -9,7 +9,7 @@ Base on [go-redis](https://github.com/go-redis/redis)
 ## Installation
 
 ```go
-go get -u github.com/hellowords/go-session-redis
+go get -u github.com/hellowords/gsr
 ```
 
 ## Example
