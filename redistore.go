@@ -19,7 +19,6 @@ import (
 var (
 	defaultMaxAge = 60 * 20
 	sessionExpire = 86400 * 30
-	ctx           = context.Background()
 )
 
 //Serializer
@@ -28,6 +27,7 @@ type Serializer interface {
 	Serialize(ss *sessions.Session) ([]byte, error)
 }
 
+//JSONSerializer 使用json数据格式人为可读
 type JSONSerializer struct{}
 
 func (s JSONSerializer) Serialize(ss *sessions.Session) ([]byte, error) {
@@ -36,7 +36,6 @@ func (s JSONSerializer) Serialize(ss *sessions.Session) ([]byte, error) {
 		ks, ok := k.(string)
 		if !ok {
 			err := fmt.Errorf("Non-string key value, cannot serialize session to JSON: %v\n", k)
-			fmt.Printf("redistore.JSONSerializer.Serialize() Error: %v", err)
 			return nil, err
 		}
 		m[ks] = v
@@ -48,7 +47,6 @@ func (s JSONSerializer) Deserialize(d []byte, ss *sessions.Session) error {
 	m := make(map[string]interface{})
 	err := json.Unmarshal(d, &m)
 	if err != nil {
-		fmt.Printf("redistore.JSONSerializer.Deserialize() Error: %v", err)
 		return err
 	}
 	for k, v := range m {
@@ -57,6 +55,7 @@ func (s JSONSerializer) Deserialize(d []byte, ss *sessions.Session) error {
 	return nil
 }
 
+//GobSerializer go 特有编码方式，此种编码数据不能与其他语言通信
 type GobSerializer struct{}
 
 func (s GobSerializer) Serialize(ss *sessions.Session) ([]byte, error) {
@@ -75,7 +74,7 @@ func (s GobSerializer) Deserialize(d []byte, ss *sessions.Session) error {
 }
 
 type RedisStore struct {
-	Client        *redis.Client
+	client        *redis.Client
 	Codecs        []securecookie.Codec
 	Options       *sessions.Options
 	DefaultMaxAge int
@@ -111,9 +110,9 @@ func (s *RedisStore) SetMaxAge(v int) {
 	}
 }
 
-func NewRedisStoreWithDB(client *redis.Client, keyPairs ...[]byte) (*RedisStore, error) {
+func NewRedisStoreWithDB(ctx context.Context, client *redis.Client, keyPairs ...[]byte) (*RedisStore, error) {
 	rs := &RedisStore{
-		Client: client,
+		client: client,
 		Codecs: securecookie.CodecsFromPairs(keyPairs...),
 		Options: &sessions.Options{
 			Path:   "/",
@@ -122,14 +121,13 @@ func NewRedisStoreWithDB(client *redis.Client, keyPairs ...[]byte) (*RedisStore,
 		DefaultMaxAge: defaultMaxAge,
 		maxLength:     4096,
 		keyPrefix:     "gosession_",
-		serializer:    GobSerializer{},
+		serializer:    GobSerializer{}, // JSONSerializer{} 使用json数据格式人为可读
 	}
-	err := rs.ping()
-	return rs, err
+	return rs, rs.client.Ping(ctx).Err()
 }
 
 func (s *RedisStore) Close() error {
-	return s.Client.Close()
+	return s.client.Close()
 }
 
 func (s *RedisStore) Get(r *http.Request, name string) (*sessions.Session, error) {
@@ -148,7 +146,7 @@ func (s *RedisStore) New(r *http.Request, name string) (*sessions.Session, error
 	if c, errCookie := r.Cookie(name); errCookie == nil {
 		err = securecookie.DecodeMulti(name, c.Value, &session.ID, s.Codecs...)
 		if err == nil {
-			ok, err = s.load(session)
+			ok, err = s.load(r.Context(), session)
 			session.IsNew = !(err == nil && ok)
 		}
 	}
@@ -157,7 +155,7 @@ func (s *RedisStore) New(r *http.Request, name string) (*sessions.Session, error
 
 func (s *RedisStore) Save(r *http.Request, w http.ResponseWriter, session *sessions.Session) error {
 	if session.Options.MaxAge <= 0 {
-		if err := s.delete(session); err != nil {
+		if err := s.delete(r.Context(), session); err != nil {
 			return err
 		}
 		http.SetCookie(w, sessions.NewCookie(session.Name(), "", session.Options))
@@ -165,7 +163,7 @@ func (s *RedisStore) Save(r *http.Request, w http.ResponseWriter, session *sessi
 		if session.ID == "" {
 			session.ID = strings.TrimRight(base32.StdEncoding.EncodeToString(securecookie.GenerateRandomKey(32)), "")
 		}
-		if err := s.save(session); err != nil {
+		if err := s.save(r.Context(), session); err != nil {
 			return err
 		}
 		encode, err := securecookie.EncodeMulti(session.Name(), session.ID, s.Codecs...)
@@ -177,14 +175,7 @@ func (s *RedisStore) Save(r *http.Request, w http.ResponseWriter, session *sessi
 	return nil
 }
 
-func (s *RedisStore) ping() error {
-	con, cancelFunc := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancelFunc()
-	_, err := s.Client.Ping(con).Result()
-	return err
-}
-
-func (s *RedisStore) save(session *sessions.Session) error {
+func (s *RedisStore) save(ctx context.Context, session *sessions.Session) error {
 	b, err := s.serializer.Serialize(session)
 	if err != nil {
 		return err
@@ -196,12 +187,12 @@ func (s *RedisStore) save(session *sessions.Session) error {
 	if age == 0 {
 		age = s.DefaultMaxAge
 	}
-	err = s.Client.SetEX(ctx, s.keyPrefix+session.ID, b, time.Duration(age)*time.Second).Err()
+	err = s.client.Set(ctx, s.keyPrefix+session.ID, b, time.Duration(age)*time.Second).Err()
 	return err
 }
 
-func (s *RedisStore) load(session *sessions.Session) (bool, error) {
-	b, err := s.Client.Get(ctx, s.keyPrefix+session.ID).Bytes()
+func (s *RedisStore) load(ctx context.Context, session *sessions.Session) (bool, error) {
+	b, err := s.client.Get(ctx, s.keyPrefix+session.ID).Bytes()
 	switch {
 	case err == redis.Nil:
 		return false, err
@@ -214,6 +205,6 @@ func (s *RedisStore) load(session *sessions.Session) (bool, error) {
 	}
 }
 
-func (s *RedisStore) delete(session *sessions.Session) error {
-	return s.Client.Del(ctx, s.keyPrefix+session.ID).Err()
+func (s *RedisStore) delete(ctx context.Context, session *sessions.Session) error {
+	return s.client.Del(ctx, s.keyPrefix+session.ID).Err()
 }

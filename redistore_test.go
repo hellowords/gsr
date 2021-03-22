@@ -2,7 +2,7 @@ package gsr
 
 import (
 	"bytes"
-	"fmt"
+	"context"
 	"github.com/go-redis/redis/v8"
 	"net/http"
 	"testing"
@@ -53,12 +53,10 @@ func (rw *ResponseRecorder) Flush() {
 
 func TestNewRedisStoreWithDB(t *testing.T) {
 	client := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "",
-		DB:       8,
-		PoolSize: 10,
+		Addr: "localhost:6389",
 	})
-	db, err := NewRedisStoreWithDB(client, []byte("new-key"))
+	con := context.TODO()
+	db, err := NewRedisStoreWithDB(con, client, []byte("new-key"))
 	if err != nil {
 		panic(err)
 	}
@@ -86,6 +84,4 @@ func TestNewRedisStoreWithDB(t *testing.T) {
 	if !ok || len(cookies) != 1 {
 		t.Fatalf("No cookies. Header: %v\n", hdr)
 	}
-	fmt.Printf("Heder: %v\n", hdr)
-	fmt.Printf("Flashed: %v\n", ss.Flashes("ping"))
 }
